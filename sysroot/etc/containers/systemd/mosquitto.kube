@@ -1,0 +1,5 @@
+[Kube]
+Yaml=mosquitto.yml
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=Bluechi Kube Gateway Service
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/bluechi-kube-gateway
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
