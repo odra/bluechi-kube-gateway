@@ -5,12 +5,18 @@ import subprocess
 from datetime import datetime
 
 from flask import Flask, jsonify, request
+from bluechi.api import Controller, Node
+from dasbus.error import DBusError
 
 BKG_PODMAN = os.environ.get('BKG_PODMAN', '/usr/bin/podman')
 BKG_PORT = int(os.environ.get('BKG_PORT', 8000))
 BKG_QUADLET_DIR = os.environ.get('BKG_QUADLET_DIR', '/etc/containers/systemd')
 
 app = Flask(__name__)
+
+#
+# Pods
+#
 
 
 def _kube_state(podman_data):
@@ -28,7 +34,8 @@ def _kube_state(podman_data):
         elif state == "exited":
             terminated_state = {
                 "exitCode": 0,  # You may want to adjust this based on actual exit code
-                "finishedAt": podman_data.get("Created"),  # Set this to the actual finished time if available
+                # Set this to the actual finished time if available
+                "finishedAt": podman_data.get("Created"),
                 "startedAt": podman_data.get("Created"),
             }
     else:
@@ -44,37 +51,37 @@ def _kube_state(podman_data):
 
 def _podman_to_kube(namespace, uid, podman_data):
     return {
-            "kind": "Pod",
-            "apiVersion": "v1",
-            "metadata": {
+        "kind": "Pod",
+        "apiVersion": "v1",
+        "metadata": {
                 "name": uid,
                 "namespace": namespace,
                 "uid": podman_data.get("Id"),
                 "creationTimestamp": podman_data.get("Created"),
-            },
-            "status": {
-                "phase": podman_data.get("State", {}).get("Status", "Unkonwn"),
-                "containerStatuses": [
-                    {
-                        "name": uid,
-                        "state": _kube_state(podman_data),
-                        "ready": podman_data.get("State", {}).get("Running", False),
-                        "restartCount": podman_data.get("RestartCount", 0),
-                        "image": podman_data.get("Image"),
-                        "imageID": podman_data.get("ImageID"),
-                    }
-                ]
-            },
-            'spec': {
-                "containers": [
-                    {
-                        "name": uid,
-                        "image": podman_data.get("Image"),
-                        "ports": podman_data.get('Ports', [])
-                    }
-                ]
-            }
+        },
+        "status": {
+            "phase": podman_data.get("State", {}).get("Status", "Unkonwn"),
+            "containerStatuses": [
+                {
+                    "name": uid,
+                    "state": _kube_state(podman_data),
+                    "ready": podman_data.get("State", {}).get("Running", False),
+                    "restartCount": podman_data.get("RestartCount", 0),
+                    "image": podman_data.get("Image"),
+                    "imageID": podman_data.get("ImageID"),
+                }
+            ]
+        },
+        "spec": {
+            "containers": [
+                {
+                    "name": uid,
+                    "image": podman_data.get("Image"),
+                    "ports": podman_data.get('Ports', [])
+                }
+            ]
         }
+    }
 
 
 def _get_pod(namespace, uid):
@@ -119,15 +126,184 @@ def _get_pods(namespace):
         }
 
         for container in containers_data:
-            kubernetes_response['items'].append(_get_pod(namespace, container['Names'][0].lstrip('/')))
+            kubernetes_response['items'].append(
+                _get_pod(namespace, container['Names'][0].lstrip('/')))
             # kubernetes_response['items'].append(_podman_to_kube(namespace, container['Names'][0].lstrip('/'), container))
-            
+
         return kubernetes_response
 
     except subprocess.CalledProcessError as e:
         print(f"Error retrieving containers: {e.stderr}")
     except json.JSONDecodeError as e:
         print(f"Error parsing JSON: {e}")
+
+
+#
+# Nodes
+#
+
+def _bluechi_node_to_kube(node):
+    return {
+        "kind": "Node",
+        "apiVersion": "v1",
+        "metadata": {
+                "name": node[0],
+                "uid": node[1],
+                "creationTimestamp": None,
+        },
+        "status": {
+            "addresses": [
+                {
+                    "address": node[3],
+                    "type": "InternalIP",
+                }
+            ],
+        },
+        "spec": {
+            "name": node[0],
+            "path": node[1],
+            "status": node[2],
+            "ip": node[3],
+        }
+    }
+
+
+def _get_bluechi_node(name):
+    try:
+        for node in Controller().list_nodes():
+            if node[0] == name:
+                return _bluechi_node_to_kube(node)
+
+        raise Exception(f"Node '{name}' not found")
+    except DBusError as e:
+        print(f"Error retrieving node: {e}")
+    except Exception as e:
+        print(f"Failed to retrieve node: {e}")
+
+
+def _get_bluechi_nodes():
+    try:
+        # Format the data to resemble a Kubernetes response
+        kubernetes_response = {
+            "kind": "NodeList",
+            "apiVersion": "v1",
+            "metadata": {
+                "resourceVersion": "0"
+            },
+            "items": []
+        }
+
+        for node in Controller().list_nodes():
+            kubernetes_response['items'].append(
+                _bluechi_node_to_kube(node))
+
+    except DBusError as e:
+        print(f"Error retrieving nodes: {e}")
+    except Exception as e:
+        print(f"Failed to retrieve nodes: {e}")
+    return kubernetes_response
+
+
+#
+# SystemdUnits
+#
+
+def _bluechi_unit_to_kube(namespace, unit):
+    status = {
+        "loadState": unit[2],
+        "activeState": unit[3],
+        "subState": unit[4],
+    }
+
+    return {
+        "kind": "SystemdUnit",
+        "apiVersion": "v1",
+        "metadata": {
+                "name": unit[0],
+                "namespace": namespace,
+                "unitType": unit[0].split(".")[-1],
+                "uid": unit[6],
+                "creationTimestamp": None,
+        },
+        "status": status,
+        "spec": {
+            "name": unit[0],
+            "path": unit[6],
+            "description": unit[1],
+            "status": status,
+            "following": unit[5],
+            "jobID": unit[7],
+            "jobType": unit[8],
+            "jobPath": unit[9],
+        }
+    }
+
+
+def _get_systemd_unit(namespace, name):
+    try:
+        if namespace == "default":
+            raise Exception("Specific namespace (node name) required")
+
+        node = Node(namespace)
+        for unit in node.list_units():
+            if unit[0] == name:
+                return _bluechi_unit_to_kube(namespace, unit)
+
+        raise Exception(f"Systemd unit '{name}' on '{namespace}' not found")
+    except DBusError as e:
+        print(f"Error retrieving systemd units: {e}")
+    except Exception as e:
+        print(f"Failed to retrieve systemd units: {e}")
+
+
+def _get_systemd_units(namespace):
+    try:
+        # Format the data to resemble a Kubernetes response
+        kubernetes_response = {
+            "kind": "SystemdUnitList",
+            "apiVersion": "v1",
+            "metadata": {
+                "resourceVersion": "0"
+            },
+            "items": []
+        }
+
+        if namespace == "default":
+            for unit in Controller().list_units():
+                kubernetes_response['items'].append(
+                    _bluechi_unit_to_kube(namespace, unit[1:]))
+        else:
+            node = Node(namespace)
+            for unit in node.list_units():
+                kubernetes_response['items'].append(
+                    _bluechi_unit_to_kube(namespace, unit))
+
+    except DBusError as e:
+        print(f"Error retrieving systemd units: {e}")
+    except Exception as e:
+        print(f"Failed to retrieve systemd units: {e}")
+    return kubernetes_response
+
+#
+# Events
+#
+
+
+def _get_events(params):
+    kubernetes_response = {
+        "kind": "EventList",
+        "apiVersion": "v1",
+        "metadata": {
+                "resourceVersion": "0"
+        },
+        "items": [],
+    }
+
+    return kubernetes_response
+
+#
+# REST endpoints
+#
 
 
 @app.route('/apis', methods=['GET'])
@@ -157,14 +333,17 @@ def apis():
 def api():
     return jsonify({
         'paths': {
-            '/api/v1/pods': 'core/v1'
+            '/api/v1/pods': 'core/v1',
+            '/api/v1/events': 'core/v1',
+            '/api/v1/nodes': 'core/v1',
+            '/api/v1/systemdunits': 'bluechi/v1',
         }
     })
 
 
 @app.route('/api/v1', methods=['GET'])
 def api_corev1():
-     return jsonify({
+    return jsonify({
         'apiVersion': 'v1',
         'kind': 'APIResourceList',
         'resources': [
@@ -175,7 +354,31 @@ def api_corev1():
                 'namespaced': True,
                 'shortNames': ['po'],
                 'verbs': ['create', 'list', 'get', 'watch', 'update', 'patch', 'delete']
-            }
+            },
+            {
+                'name': 'systemdunits',
+                'kind': 'SystemdUnit',
+                'singularName': 'systemdunit',
+                'namespaced': True,
+                'shortNames': ['ssvc'],
+                'verbs': ['list', 'get', 'watch']
+            },
+            {
+                'name': 'nodes',
+                'kind': 'Node',
+                'singularName': 'node',
+                'namespaced': False,
+                'shortNames': ['nod'],
+                'verbs': ['list', 'get', 'watch']
+            },
+            {
+                'name': 'events',
+                'kind': 'Event',
+                'singularName': 'event',
+                'namespaced': False,
+                'shortNames': ['ev'],
+                'verbs': ['list', 'get', 'watch']
+            },
         ]
     })
 
@@ -188,6 +391,40 @@ def api_corev1_pods(namespace):
 @app.route('/api/v1/namespaces/<namespace>/pods/<name>', methods=['GET'])
 def api_corev1_pod(namespace, name):
     return jsonify(_get_pod(namespace, name))
+
+
+@app.route('/api/v1/pods', methods=['GET'])
+def api_corev1_pods2():
+    return jsonify(_get_pods(""))
+
+
+@app.route('/api/v1/nodes', methods=['GET'])
+def api_bluechiv1_nodes():
+    return jsonify(_get_bluechi_nodes())
+
+
+@app.route('/api/v1/nodes/<name>', methods=['GET'])
+def api_bluechiv1_node(name):
+    return jsonify(_get_bluechi_node(name))
+
+
+@app.route('/api/v1/namespaces/<namespace>/systemdunits', methods=['GET'])
+def api_bluechiv1_systemd_units(namespace):
+    return jsonify(_get_systemd_units(namespace))
+
+
+@app.route('/api/v1/namespaces/<namespace>/systemdunits/<name>', methods=['GET'])
+def api_bluechiv1_systemd_unit(namespace, name):
+    return jsonify(_get_systemd_unit(namespace, name))
+
+
+@app.route('/api/v1/events', methods=['GET'])
+def api_corev1_events():
+    selector = request.args.get('fieldSelector')
+    params = []
+    if selector is not None and "," in selector:
+        params = selector.split(",")
+    return jsonify(_get_events(params))
 
 
 @app.route('/api/<api_version>/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE'])
