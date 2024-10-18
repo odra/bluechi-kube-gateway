@@ -2,8 +2,9 @@
 import os
 import json
 import subprocess
+from datetime import datetime
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from bluechi.api import Controller, Node
 from dasbus.error import DBusError
 
@@ -283,6 +284,27 @@ def _get_systemd_units(namespace):
         print(f"Failed to retrieve systemd units: {e}")
     return kubernetes_response
 
+#
+# Events
+#
+
+
+def _get_events(params):
+    kubernetes_response = {
+        "kind": "EventList",
+        "apiVersion": "v1",
+        "metadata": {
+                "resourceVersion": "0"
+        },
+        "items": [],
+    }
+
+    return kubernetes_response
+
+#
+# REST endpoints
+#
+
 
 @app.route('/apis', methods=['GET'])
 def apis():
@@ -312,7 +334,8 @@ def api():
     return jsonify({
         'paths': {
             '/api/v1/pods': 'core/v1',
-            '/api/v1/nodes': 'bluechi/v1',
+            '/api/v1/events': 'core/v1',
+            '/api/v1/nodes': 'core/v1',
             '/api/v1/systemdunits': 'bluechi/v1',
         }
     })
@@ -348,6 +371,14 @@ def api_corev1():
                 'shortNames': ['nod'],
                 'verbs': ['list', 'get', 'watch']
             },
+            {
+                'name': 'events',
+                'kind': 'Event',
+                'singularName': 'event',
+                'namespaced': False,
+                'shortNames': ['ev'],
+                'verbs': ['list', 'get', 'watch']
+            },
         ]
     })
 
@@ -368,23 +399,32 @@ def api_corev1_pods2():
 
 
 @app.route('/api/v1/nodes', methods=['GET'])
-def api_corev1_nodes():
+def api_bluechiv1_nodes():
     return jsonify(_get_bluechi_nodes())
 
 
 @app.route('/api/v1/nodes/<name>', methods=['GET'])
-def api_corev1_node(name):
+def api_bluechiv1_node(name):
     return jsonify(_get_bluechi_node(name))
 
 
 @app.route('/api/v1/namespaces/<namespace>/systemdunits', methods=['GET'])
-def api_corev1_systemd_units(namespace):
+def api_bluechiv1_systemd_units(namespace):
     return jsonify(_get_systemd_units(namespace))
 
 
 @app.route('/api/v1/namespaces/<namespace>/systemdunits/<name>', methods=['GET'])
-def api_corev1_systemd_unit(namespace, name):
+def api_bluechiv1_systemd_unit(namespace, name):
     return jsonify(_get_systemd_unit(namespace, name))
+
+
+@app.route('/api/v1/events', methods=['GET'])
+def api_corev1_events():
+    selector = request.args.get('fieldSelector')
+    params = []
+    if selector is not None and "," in selector:
+        params = selector.split(",")
+    return jsonify(_get_events(params))
 
 
 @app.route('/api/<api_version>/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE'])
