@@ -1,0 +1,26 @@
+[tool.poetry]
+name = "bluechi-kube-gateway"
+version = "0.1.0"
+description = "my k8s gateway"
+authors = ["Leonardo Rossetti <lrossett@redhat.com>"]
+license = "MIT"
+readme = "README.md"
+packages = [
+    {include="bluechi_kube_gateway", from="src/"}
+]
+
+[tool.poetry.scripts]
+bluechi-kube-gateway = "bluechi_kube_gateway.server:run"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+click = "^8.1.7"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.3"
+pytest-sugar = "^1.0.0"
+mypy = "^1.13.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

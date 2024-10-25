@@ -1,34 +1,11 @@
-# Eclipse BlueChi Kube Gateway
+# BlueChi Kube Gateway
 
-A (early stage or poc) gateway that bridges kubectl and Eclipse BlueChi/Podman/Quadlet.
+A re-implementation of the Kubernetes API Server to bridge kubernetes client tools (such as kubectl) to BlueChi.
 
-## Usage
+## Project Structure
 
-Build the image:
-
-```
-podman build --cap-add=sys_admin -t localhost/autosd-example:latest .
-```
-
-Run the container:
-
-```
-podman run -d --rm --name autosd-example --privileged localhost/autosd-example:latest
-```
-
-"Enter" into the container:
-
-```
-podman exec -it autosd-example /bin/bash
-```
-
-You can now issue basic podman commands such as:
-
-```
-kubectl api-resources
-kubectl get po
-kubectl get po/mosquitto-pod-app
-```
+* `images`: linux container image defintions that can be used with this project;
+* `bluechi-kube-gateway`: the source files to build/run the gateway server.
 
 ## License
 
